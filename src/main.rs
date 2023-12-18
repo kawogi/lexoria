@@ -1,6 +1,7 @@
 #![warn(clippy::pedantic)]
 #![allow(
     clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
@@ -53,20 +54,20 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
 
     let mut height_map = vec![vec![0.0; X]; Y];
     let mut max = 0.0_f32;
-    for y in 0..Y {
-        for x in 0..X {
+    for (y, heights) in height_map.iter_mut().enumerate() {
+        for (x, height) in heights.iter_mut().enumerate() {
             let xx = x as f32 / X as f32;
             let yy = y as f32 / Y as f32;
             let h = (xx * 2.0 + 0.6).sin() * (yy * 3.0 + 0.2).sin();
             let h = h + (xx * 7.0 + 0.7).sin() * (yy * 6.6 + 0.3).sin() * 0.5;
             let h = h.max(0.0) - rng.gen::<f32>() * 0.1;
             max = max.max(h);
-            height_map[y][x] = h;
+            *height = h;
         }
     }
-    for y in 0..Y {
-        for x in 0..X {
-            height_map[y][x] *= (Z - 1) as f32 / max;
+    for heights in &mut height_map {
+        for height in heights {
+            *height *= (Z - 1) as f32 / max;
         }
     }
 
@@ -88,7 +89,7 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
                 //*voxel = (x ^ y ^ z) & 1 == 0;
                 if z as f32 >= height_map[y][x] {
                     // *voxel = Some(Vec3::new(rng.gen(), rng.gen(), rng.gen()));
-                    *voxel = Some(colors[Z - z as usize - 1]);
+                    *voxel = Some(colors[Z - z - 1]);
                 }
             }
         }
@@ -203,63 +204,8 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
         .flat_map(|index| [index, index + 2, index + 1, index + 1, index + 2, index + 3])
         .collect::<Vec<_>>();
 
-    // let vertex_data = [
-    //     // top (0, 0, 1)
-    //     vertex([-1, -1, 1], [0, 0, 1]),
-    //     vertex([1, -1, 1], [0, 0, 1]),
-    //     vertex([1, 1, 1], [0, 0, 1]),
-    //     vertex([-1, 1, 1], [0, 0, 1]),
-    //     // bottom (0, 0, -1)
-    //     vertex([-1, 1, -1], [0, 0, -1]),
-    //     vertex([1, 1, -1], [0, 0, -1]),
-    //     vertex([1, -1, -1], [0, 0, -1]),
-    //     vertex([-1, -1, -1], [0, 0, -1]),
-    //     // right (1, 0, 0)
-    //     vertex([1, -1, -1], [1, 0, 0]),
-    //     vertex([1, 1, -1], [1, 0, 0]),
-    //     vertex([1, 1, 1], [1, 0, 0]),
-    //     vertex([1, -1, 1], [1, 0, 0]),
-    //     // left (-1, 0, 0)
-    //     vertex([-1, -1, 1], [-1, 0, 0]),
-    //     vertex([-1, 1, 1], [-1, 0, 0]),
-    //     vertex([-1, 1, -1], [-1, 0, 0]),
-    //     vertex([-1, -1, -1], [-1, 0, 0]),
-    //     // front (0, 1, 0)
-    //     vertex([1, 1, -1], [0, 1, 0]),
-    //     vertex([-1, 1, -1], [0, 1, 0]),
-    //     vertex([-1, 1, 1], [0, 1, 0]),
-    //     vertex([1, 1, 1], [0, 1, 0]),
-    //     // back (0, -1, 0)
-    //     vertex([1, -1, 1], [0, -1, 0]),
-    //     vertex([-1, -1, 1], [0, -1, 0]),
-    //     vertex([-1, -1, -1], [0, -1, 0]),
-    //     vertex([1, -1, -1], [0, -1, 0]),
-    // ];
-
-    // let index_data: &[u16] = &[
-    //     0, 1, 2, 2, 3, 0, // top
-    //     4, 5, 6, 6, 7, 4, // bottom
-    //     8, 9, 10, 10, 11, 8, // right
-    //     12, 13, 14, 14, 15, 12, // left
-    //     16, 17, 18, 18, 19, 16, // front
-    //     20, 21, 22, 22, 23, 20, // back
-    // ];
-
     (vertex_data, index_data)
 }
-
-// fn create_plane(size: i8) -> (Vec<Vertex>, Vec<u16>) {
-//     let vertex_data = [
-//         vertex([size, -size, 0], [0, 0, 1]),
-//         vertex([size, size, 0], [0, 0, 1]),
-//         vertex([-size, -size, 0], [0, 0, 1]),
-//         vertex([-size, size, 0], [0, 0, 1]),
-//     ];
-
-//     let index_data: &[u16] = &[0, 1, 2, 2, 1, 3];
-
-//     (vertex_data.to_vec(), index_data.to_vec())
-// }
 
 struct Entity {
     mx_world: glam::Mat4,
@@ -723,10 +669,6 @@ impl Example {
             entity_bind_group,
             time: Instant::now(),
         }
-    }
-
-    fn update(&mut self, _event: winit::event::WindowEvent) {
-        //empty
     }
 
     fn resize(

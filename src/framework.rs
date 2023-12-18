@@ -431,7 +431,6 @@ fn start(
                     println!("{:#?}", instance.generate_report());
                 }
                 _ => {
-                    example.update(event);
                 }
             },
             event::Event::RedrawRequested(_) => {
