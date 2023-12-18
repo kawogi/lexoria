@@ -32,7 +32,7 @@ struct Vertex {
     _color: [f32; 4],
 }
 
-fn vertex(pos: [i16; 3], nor: [i8; 3], color: [f32; 3]) -> Vertex {
+fn vertex(pos: [i16; 3], nor: [i8; 3], color: Vec3) -> Vertex {
     Vertex {
         _pos: [pos[0], pos[1], pos[2], 1],
         _normal: [nor[0], nor[1], nor[2], 0],
@@ -49,34 +49,36 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
     const HY: i16 = Y as i16 / 2;
     const HZ: i16 = Z as i16 / 2;
     let mut rng = rand::thread_rng();
-    let mut voxels = [[[false; X]; Y]; Z];
+    let mut voxels = [[[Option::<Vec3>::None; X]; Y]; Z];
     for (z, xy_plane) in voxels.iter_mut().enumerate() {
         for (y, x_column) in xy_plane.iter_mut().enumerate() {
             for (x, voxel) in x_column.iter_mut().enumerate() {
                 //*voxel = (x ^ y ^ z) & 1 == 0;
-                *voxel = rng.gen();
+                if rng.gen() {
+                    *voxel = Some(Vec3::new(rng.gen(), rng.gen(), rng.gen()));
+                }
             }
         }
     }
 
-    let is_set = |x: i16, y: i16, z: i16| -> bool {
+    let get_voxel = |x: i16, y: i16, z: i16| -> _ {
         let Ok(x) = usize::try_from(x + HX) else {
-            return false;
+            return None;
         };
         let Ok(y) = usize::try_from(y + HY) else {
-            return false;
+            return None;
         };
         let Ok(z) = usize::try_from(z + HZ) else {
-            return false;
+            return None;
         };
         let Some(xy_plane) = voxels.get(z) else {
-            return false;
+            return None;
         };
         let Some(x_column) = xy_plane.get(y) else {
-            return false;
+            return None;
         };
         let Some(&voxel) = x_column.get(x) else {
-            return false;
+            return None;
         };
 
         voxel
@@ -87,20 +89,18 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
     for x in -HX..=HX {
         for z in -HZ..HZ {
             for y in -HY..HY {
-                let is_a = is_set(x - 1, y, z);
-                let is_b = is_set(x, y, z);
+                let is_a = get_voxel(x - 1, y, z);
+                let is_b = get_voxel(x, y, z);
                 match (is_a, is_b) {
-                    (false, true) => {
+                    (None, Some(color)) => {
                         let normal = [-1, 0, 0];
-                        let color = [rng.gen(), rng.gen(), rng.gen()];
                         vertex_data.push(vertex([x, y, z], normal, color));
                         vertex_data.push(vertex([x, y + 1, z], normal, color));
                         vertex_data.push(vertex([x, y, z + 1], normal, color));
                         vertex_data.push(vertex([x, y + 1, z + 1], normal, color));
                     }
-                    (true, false) => {
+                    (Some(color), None) => {
                         let normal = [1, 0, 0];
-                        let color = [rng.gen(), rng.gen(), rng.gen()];
                         vertex_data.push(vertex([x, y, z], normal, color));
                         vertex_data.push(vertex([x, y, z + 1], normal, color));
                         vertex_data.push(vertex([x, y + 1, z], normal, color));
@@ -115,20 +115,18 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
     for y in -HY..=HY {
         for x in -HX..HX {
             for z in -HZ..HZ {
-                let is_a = is_set(x, y - 1, z);
-                let is_b = is_set(x, y, z);
+                let is_a = get_voxel(x, y - 1, z);
+                let is_b = get_voxel(x, y, z);
                 match (is_a, is_b) {
-                    (false, true) => {
+                    (None, Some(color)) => {
                         let normal = [0, -1, 0];
-                        let color = [rng.gen(), rng.gen(), rng.gen()];
                         vertex_data.push(vertex([x, y, z], normal, color));
                         vertex_data.push(vertex([x, y, z + 1], normal, color));
                         vertex_data.push(vertex([x + 1, y, z], normal, color));
                         vertex_data.push(vertex([x + 1, y, z + 1], normal, color));
                     }
-                    (true, false) => {
+                    (Some(color), None) => {
                         let normal = [0, 1, 0];
-                        let color = [rng.gen(), rng.gen(), rng.gen()];
                         vertex_data.push(vertex([x, y, z], normal, color));
                         vertex_data.push(vertex([x + 1, y, z], normal, color));
                         vertex_data.push(vertex([x, y, z + 1], normal, color));
@@ -143,20 +141,18 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
     for z in -HZ..=HZ {
         for y in -HY..HY {
             for x in -HX..HX {
-                let is_a = is_set(x, y, z - 1);
-                let is_b = is_set(x, y, z);
+                let is_a = get_voxel(x, y, z - 1);
+                let is_b = get_voxel(x, y, z);
                 match (is_a, is_b) {
-                    (false, true) => {
+                    (None, Some(color)) => {
                         let normal = [0, 0, -1];
-                        let color = [rng.gen(), rng.gen(), rng.gen()];
                         vertex_data.push(vertex([x, y, z], normal, color));
                         vertex_data.push(vertex([x + 1, y, z], normal, color));
                         vertex_data.push(vertex([x, y + 1, z], normal, color));
                         vertex_data.push(vertex([x + 1, y + 1, z], normal, color));
                     }
-                    (true, false) => {
+                    (Some(color), None) => {
                         let normal = [0, 0, 1];
-                        let color = [rng.gen(), rng.gen(), rng.gen()];
                         vertex_data.push(vertex([x, y, z], normal, color));
                         vertex_data.push(vertex([x, y + 1, z], normal, color));
                         vertex_data.push(vertex([x + 1, y, z], normal, color));
