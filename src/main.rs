@@ -17,7 +17,13 @@
 mod framework;
 mod utils;
 
-use std::{borrow::Cow, f32::consts, iter, mem, ops::Range, sync::Arc};
+use std::{
+    borrow::Cow,
+    f32::consts::{self, TAU},
+    iter, mem,
+    ops::Range,
+    sync::Arc,
+};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
@@ -209,9 +215,6 @@ fn create_world() -> Mesh {
 }
 
 struct Entity {
-    mx_world: glam::Mat4,
-    rotation_speed: f32,
-    color: wgpu::Color,
     vertex_buf: Arc<wgpu::Buffer>,
     index_buf: Arc<wgpu::Buffer>,
     index_format: wgpu::IndexFormat,
@@ -286,6 +289,7 @@ struct Example {
     entity_bind_group: wgpu::BindGroup,
     light_storage_buf: wgpu::Buffer,
     entity_uniform_buf: wgpu::Buffer,
+    start_time: Instant,
     time: Instant,
 }
 
@@ -378,9 +382,6 @@ impl Example {
         let index_format = wgpu::IndexFormat::Uint16;
 
         let entities = vec![Entity {
-            mx_world: Mat4::IDENTITY,
-            rotation_speed: 0.2,
-            color: wgpu::Color::GREEN,
             vertex_buf: Arc::clone(&cube_vertex_buf),
             index_buf: Arc::clone(&cube_index_buf),
             index_format,
@@ -571,6 +572,7 @@ impl Example {
             light_storage_buf,
             entity_uniform_buf,
             entity_bind_group,
+            start_time: Instant::now(),
             time: Instant::now(),
         }
     }
@@ -605,20 +607,21 @@ impl Example {
         let dt = now - self.time;
         self.time = now;
 
+        let angle = ((self.start_time.elapsed().as_micros() % 20_000_000) as f64 / 20_000_000.0)
+            as f32
+            * TAU;
+
         // update uniforms
         for entity in &mut self.entities {
-            if entity.rotation_speed != 0.0 {
-                let rotation =
-                    glam::Mat4::from_rotation_z(entity.rotation_speed * dt.as_secs_f32());
-                entity.mx_world *= rotation;
-            }
+            let rotation = glam::Mat4::from_rotation_z(angle);
+            let color = wgpu::Color::GREEN;
             let data = EntityUniforms {
-                model: entity.mx_world.to_cols_array_2d(),
+                model: rotation.to_cols_array_2d(),
                 color: [
-                    entity.color.r as f32,
-                    entity.color.g as f32,
-                    entity.color.b as f32,
-                    entity.color.a as f32,
+                    color.r as f32,
+                    color.g as f32,
+                    color.b as f32,
+                    color.a as f32,
                 ],
             };
             queue.write_buffer(
