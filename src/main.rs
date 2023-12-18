@@ -42,20 +42,53 @@ fn vertex(pos: [i16; 3], nor: [i8; 3], color: Vec3) -> Vertex {
 
 #[allow(clippy::too_many_lines)]
 fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
-    const X: usize = 16;
-    const Y: usize = 16;
-    const Z: usize = 4;
+    const X: usize = 32;
+    const Y: usize = 32;
+    const Z: usize = 8;
     const HX: i16 = X as i16 / 2;
     const HY: i16 = Y as i16 / 2;
     const HZ: i16 = Z as i16 / 2;
+
     let mut rng = rand::thread_rng();
+
+    let mut height_map = vec![vec![0.0; X]; Y];
+    let mut max = 0.0_f32;
+    for y in 0..Y {
+        for x in 0..X {
+            let xx = x as f32 / X as f32;
+            let yy = y as f32 / Y as f32;
+            let h = (xx * 2.0 + 0.6).sin() * (yy * 3.0 + 0.2).sin();
+            let h = h + (xx * 7.0 + 0.7).sin() * (yy * 6.6 + 0.3).sin() * 0.5;
+            let h = h.max(0.0) - rng.gen::<f32>() * 0.1;
+            max = max.max(h);
+            height_map[y][x] = h;
+        }
+    }
+    for y in 0..Y {
+        for x in 0..X {
+            height_map[y][x] *= (Z - 1) as f32 / max;
+        }
+    }
+
+    let colors = [
+        Vec3::new(0.2, 0.6, 0.8),
+        Vec3::new(1.0, 1.0, 0.5),
+        Vec3::new(0.6, 0.8, 0.0),
+        Vec3::new(0.2, 0.7, 0.1),
+        Vec3::new(0.3, 0.7, 0.1),
+        Vec3::new(0.7, 0.3, 0.2),
+        Vec3::new(0.7, 0.7, 0.7),
+        Vec3::new(1.0, 1.0, 1.0),
+    ];
+
     let mut voxels = [[[Option::<Vec3>::None; X]; Y]; Z];
     for (z, xy_plane) in voxels.iter_mut().enumerate() {
         for (y, x_column) in xy_plane.iter_mut().enumerate() {
             for (x, voxel) in x_column.iter_mut().enumerate() {
                 //*voxel = (x ^ y ^ z) & 1 == 0;
-                if rng.gen() {
-                    *voxel = Some(Vec3::new(rng.gen(), rng.gen(), rng.gen()));
+                if z as f32 >= height_map[y][x] {
+                    // *voxel = Some(Vec3::new(rng.gen(), rng.gen(), rng.gen()));
+                    *voxel = Some(colors[Z - z as usize - 1]);
                 }
             }
         }
@@ -523,25 +556,25 @@ impl Example {
             Light {
                 pos: glam::Vec3::new(7.0, -5.0, 10.0),
                 color: wgpu::Color {
-                    r: 0.5,
+                    r: 1.0,
                     g: 1.0,
-                    b: 0.5,
+                    b: 1.0,
                     a: 1.0,
                 },
                 fov: 60.0,
                 depth: 1.0..20.0,
             },
-            Light {
-                pos: glam::Vec3::new(-5.0, 7.0, 10.0),
-                color: wgpu::Color {
-                    r: 1.0,
-                    g: 0.5,
-                    b: 0.5,
-                    a: 1.0,
-                },
-                fov: 45.0,
-                depth: 1.0..20.0,
-            },
+            // Light {
+            //     pos: glam::Vec3::new(-5.0, 7.0, 10.0),
+            //     color: wgpu::Color {
+            //         r: 1.0,
+            //         g: 1.0,
+            //         b: 1.0,
+            //         a: 1.0,
+            //     },
+            //     fov: 45.0,
+            //     depth: 1.0..20.0,
+            // },
         ];
         let light_uniform_size =
             (Self::MAX_LIGHTS * mem::size_of::<LightRaw>()) as wgpu::BufferAddress;
