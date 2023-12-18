@@ -246,8 +246,8 @@ async fn setup(title: &str) -> Setup {
         println!("Using {} ({:?})", adapter_info.name, adapter_info.backend);
     }
 
-    let optional_features = Example::optional_features();
-    let required_features = Example::required_features();
+    let optional_features = wgpu::Features::DEPTH_CLIP_CONTROL;
+    let required_features = wgpu::Features::empty();
     let adapter_features = adapter.features();
     assert!(
         adapter_features.contains(required_features),
@@ -255,7 +255,11 @@ async fn setup(title: &str) -> Setup {
         required_features - adapter_features
     );
 
-    let required_downlevel_capabilities = Example::required_downlevel_capabilities();
+    let required_downlevel_capabilities = wgpu::DownlevelCapabilities {
+        flags: wgpu::DownlevelFlags::empty(),
+        shader_model: wgpu::ShaderModel::Sm5,
+        ..wgpu::DownlevelCapabilities::default()
+    };
     let downlevel_capabilities = adapter.get_downlevel_capabilities();
     assert!(
         downlevel_capabilities.shader_model >= required_downlevel_capabilities.shader_model,
@@ -271,7 +275,8 @@ async fn setup(title: &str) -> Setup {
     );
 
     // Make sure we use the texture resolution limits from the adapter, so we can support images the size of the surface.
-    let needed_limits = Example::required_limits().using_resolution(adapter.limits());
+    let needed_limits =
+        wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
 
     let trace_dir = std::env::var("WGPU_TRACE");
     let (device, queue) = adapter
@@ -368,11 +373,6 @@ fn start(
     log::info!("Initializing the example...");
     let mut example = Example::init(&config, &adapter, &device, &queue);
 
-    // //#[cfg(not(target_arch = "wasm32"))]
-    // let mut last_frame_inst = Instant::now();
-    // //#[cfg(not(target_arch = "wasm32"))]
-    // let (mut frame_count, mut accum_time) = (0, 0.0);
-
     let mut frame_counter = FrameCounter::new();
 
     log::info!("Entering render loop...");
@@ -430,8 +430,7 @@ fn start(
                 } => {
                     println!("{:#?}", instance.generate_report());
                 }
-                _ => {
-                }
+                _ => {}
             },
             event::Event::RedrawRequested(_) => {
                 frame_counter.update();

@@ -20,7 +20,7 @@ mod utils;
 use std::{borrow::Cow, f32::consts, iter, mem, ops::Range, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use rand::Rng;
 use web_time::Instant;
 use wgpu::util::{align_to, DeviceExt};
@@ -33,6 +33,11 @@ struct Vertex {
     _color: [f32; 4],
 }
 
+struct Mesh {
+    vertices: Vec<Vertex>,
+    indices: Vec<u16>,
+}
+
 fn vertex(pos: [i16; 3], nor: [i8; 3], color: Vec3) -> Vertex {
     Vertex {
         _pos: [pos[0], pos[1], pos[2], 1],
@@ -42,7 +47,7 @@ fn vertex(pos: [i16; 3], nor: [i8; 3], color: Vec3) -> Vertex {
 }
 
 #[allow(clippy::too_many_lines)]
-fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
+fn create_world() -> Mesh {
     const X: usize = 32;
     const Y: usize = 32;
     const Z: usize = 8;
@@ -58,16 +63,16 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
         for (x, height) in heights.iter_mut().enumerate() {
             let xx = x as f32 / X as f32;
             let yy = y as f32 / Y as f32;
-            let h = (xx * 2.0 + 0.6).sin() * (yy * 3.0 + 0.2).sin();
-            let h = h + (xx * 7.0 + 0.7).sin() * (yy * 6.6 + 0.3).sin() * 0.5;
-            let h = h.max(0.0) - rng.gen::<f32>() * 0.1;
+            let h = (xx * 2.0 + 1.6).sin() * (yy * 3.0 + 0.8).sin();
+            let h = h + (xx * 7.0 + 0.7).sin() * (yy * 6.6 + 1.3).sin() * 0.5;
+            let h = h.max(0.0) + rng.gen::<f32>() * 0.1;
             max = max.max(h);
             *height = h;
         }
     }
     for heights in &mut height_map {
         for height in heights {
-            *height *= (Z - 1) as f32 / max;
+            *height *= Z as f32 / max;
         }
     }
 
@@ -86,11 +91,7 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
     for (z, xy_plane) in voxels.iter_mut().enumerate() {
         for (y, x_column) in xy_plane.iter_mut().enumerate() {
             for (x, voxel) in x_column.iter_mut().enumerate() {
-                //*voxel = (x ^ y ^ z) & 1 == 0;
-                if z as f32 >= height_map[y][x] {
-                    // *voxel = Some(Vec3::new(rng.gen(), rng.gen(), rng.gen()));
-                    *voxel = Some(colors[Z - z - 1]);
-                }
+                *voxel = ((z as f32) < height_map[y][x]).then_some(colors[z]);
             }
         }
     }
@@ -118,7 +119,7 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
         voxel
     };
 
-    let mut vertex_data = Vec::new();
+    let mut vertices = Vec::new();
 
     for x in -HX..=HX {
         for z in -HZ..HZ {
@@ -128,17 +129,17 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
                 match (is_a, is_b) {
                     (None, Some(color)) => {
                         let normal = [-1, 0, 0];
-                        vertex_data.push(vertex([x, y, z], normal, color));
-                        vertex_data.push(vertex([x, y + 1, z], normal, color));
-                        vertex_data.push(vertex([x, y, z + 1], normal, color));
-                        vertex_data.push(vertex([x, y + 1, z + 1], normal, color));
+                        vertices.push(vertex([x, y, z], normal, color));
+                        vertices.push(vertex([x, y + 1, z], normal, color));
+                        vertices.push(vertex([x, y, z + 1], normal, color));
+                        vertices.push(vertex([x, y + 1, z + 1], normal, color));
                     }
                     (Some(color), None) => {
                         let normal = [1, 0, 0];
-                        vertex_data.push(vertex([x, y, z], normal, color));
-                        vertex_data.push(vertex([x, y, z + 1], normal, color));
-                        vertex_data.push(vertex([x, y + 1, z], normal, color));
-                        vertex_data.push(vertex([x, y + 1, z + 1], normal, color));
+                        vertices.push(vertex([x, y, z], normal, color));
+                        vertices.push(vertex([x, y, z + 1], normal, color));
+                        vertices.push(vertex([x, y + 1, z], normal, color));
+                        vertices.push(vertex([x, y + 1, z + 1], normal, color));
                     }
                     _ => {}
                 }
@@ -154,17 +155,17 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
                 match (is_a, is_b) {
                     (None, Some(color)) => {
                         let normal = [0, -1, 0];
-                        vertex_data.push(vertex([x, y, z], normal, color));
-                        vertex_data.push(vertex([x, y, z + 1], normal, color));
-                        vertex_data.push(vertex([x + 1, y, z], normal, color));
-                        vertex_data.push(vertex([x + 1, y, z + 1], normal, color));
+                        vertices.push(vertex([x, y, z], normal, color));
+                        vertices.push(vertex([x, y, z + 1], normal, color));
+                        vertices.push(vertex([x + 1, y, z], normal, color));
+                        vertices.push(vertex([x + 1, y, z + 1], normal, color));
                     }
                     (Some(color), None) => {
                         let normal = [0, 1, 0];
-                        vertex_data.push(vertex([x, y, z], normal, color));
-                        vertex_data.push(vertex([x + 1, y, z], normal, color));
-                        vertex_data.push(vertex([x, y, z + 1], normal, color));
-                        vertex_data.push(vertex([x + 1, y, z + 1], normal, color));
+                        vertices.push(vertex([x, y, z], normal, color));
+                        vertices.push(vertex([x + 1, y, z], normal, color));
+                        vertices.push(vertex([x, y, z + 1], normal, color));
+                        vertices.push(vertex([x + 1, y, z + 1], normal, color));
                     }
                     _ => {}
                 }
@@ -180,17 +181,17 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
                 match (is_a, is_b) {
                     (None, Some(color)) => {
                         let normal = [0, 0, -1];
-                        vertex_data.push(vertex([x, y, z], normal, color));
-                        vertex_data.push(vertex([x + 1, y, z], normal, color));
-                        vertex_data.push(vertex([x, y + 1, z], normal, color));
-                        vertex_data.push(vertex([x + 1, y + 1, z], normal, color));
+                        vertices.push(vertex([x, y, z], normal, color));
+                        vertices.push(vertex([x + 1, y, z], normal, color));
+                        vertices.push(vertex([x, y + 1, z], normal, color));
+                        vertices.push(vertex([x + 1, y + 1, z], normal, color));
                     }
                     (Some(color), None) => {
                         let normal = [0, 0, 1];
-                        vertex_data.push(vertex([x, y, z], normal, color));
-                        vertex_data.push(vertex([x, y + 1, z], normal, color));
-                        vertex_data.push(vertex([x + 1, y, z], normal, color));
-                        vertex_data.push(vertex([x + 1, y + 1, z], normal, color));
+                        vertices.push(vertex([x, y, z], normal, color));
+                        vertices.push(vertex([x, y + 1, z], normal, color));
+                        vertices.push(vertex([x + 1, y, z], normal, color));
+                        vertices.push(vertex([x + 1, y + 1, z], normal, color));
                     }
                     _ => {}
                 }
@@ -199,12 +200,12 @@ fn create_cube() -> (Vec<Vertex>, Vec<u16>) {
     }
 
     // let quad_count = (vertex_data.len() / 4) as u16;
-    let index_data = (0..vertex_data.len())
+    let indices = (0..vertices.len())
         .map(|index| index as u16 & !0b11)
         .flat_map(|index| [index, index + 2, index + 1, index + 1, index + 2, index + 3])
         .collect::<Vec<_>>();
 
-    (vertex_data, index_data)
+    Mesh { vertices, indices }
 }
 
 struct Entity {
@@ -292,25 +293,11 @@ impl Example {
     const MAX_LIGHTS: usize = 10;
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-    fn required_features() -> wgpu::Features {
-        wgpu::Features::empty()
-    }
-    fn required_downlevel_capabilities() -> wgpu::DownlevelCapabilities {
-        wgpu::DownlevelCapabilities {
-            flags: wgpu::DownlevelFlags::empty(),
-            shader_model: wgpu::ShaderModel::Sm5,
-            ..wgpu::DownlevelCapabilities::default()
-        }
-    }
-    fn required_limits() -> wgpu::Limits {
-        wgpu::Limits::downlevel_webgl2_defaults() // These downlevel limits will allow the code to run on all possible hardware
-    }
-
     fn generate_matrix(aspect_ratio: f32) -> glam::Mat4 {
-        let projection = glam::Mat4::perspective_rh(consts::FRAC_PI_4, aspect_ratio, 1.0, 20.0);
+        let projection = glam::Mat4::perspective_rh(consts::FRAC_PI_4, aspect_ratio, 1.0, 40.0);
         let view = glam::Mat4::look_at_rh(
-            glam::Vec3::new(3.0f32, -10.0, 6.0),
-            glam::Vec3::new(0f32, 0.0, 0.0),
+            glam::Vec3::new(15.0, 15.0, 15.0),
+            glam::Vec3::new(0.0, 0.0, 0.0),
             glam::Vec3::Z,
         );
         projection * view
@@ -338,10 +325,6 @@ impl Example {
         depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    fn optional_features() -> wgpu::Features {
-        wgpu::Features::DEPTH_CLIP_CONTROL
-    }
-
     #[allow(clippy::too_many_lines)]
     fn init(
         config: &wgpu::SurfaceConfiguration,
@@ -349,13 +332,6 @@ impl Example {
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
     ) -> Self {
-        struct CubeDesc {
-            offset: glam::Vec3,
-            angle: f32,
-            scale: f32,
-            rotation: f32,
-        }
-
         let supports_storage_resources = adapter
             .get_downlevel_capabilities()
             .flags
@@ -364,7 +340,10 @@ impl Example {
 
         // Create the vertex and index buffers
         let vertex_size = mem::size_of::<Vertex>();
-        let (cube_vertex_data, cube_index_data) = create_cube();
+        let Mesh {
+            vertices: cube_vertex_data,
+            indices: cube_index_data,
+        } = create_world();
         let cube_vertex_buf = Arc::new(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Cubes Vertex Buffer"),
@@ -381,48 +360,8 @@ impl Example {
             },
         ));
 
-        // let (plane_vertex_data, plane_index_data) = create_plane(7);
-        // let plane_vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        //     label: Some("Plane Vertex Buffer"),
-        //     contents: bytemuck::cast_slice(&plane_vertex_data),
-        //     usage: wgpu::BufferUsages::VERTEX,
-        // });
-
-        // let plane_index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        //     label: Some("Plane Index Buffer"),
-        //     contents: bytemuck::cast_slice(&plane_index_data),
-        //     usage: wgpu::BufferUsages::INDEX,
-        // });
-
-        let cube_descs = [
-            CubeDesc {
-                offset: glam::Vec3::new(0.0, 0.0, -2.0),
-                angle: 180.0,
-                scale: 0.5,
-                rotation: 0.2,
-            },
-            // CubeDesc {
-            //     offset: glam::Vec3::new(2.0, -2.0, 2.0),
-            //     angle: 50.0,
-            //     scale: 1.3,
-            //     rotation: 0.2,
-            // },
-            // CubeDesc {
-            //     offset: glam::Vec3::new(-2.0, 2.0, 2.0),
-            //     angle: 140.0,
-            //     scale: 1.1,
-            //     rotation: 0.3,
-            // },
-            // CubeDesc {
-            //     offset: glam::Vec3::new(2.0, 2.0, 2.0),
-            //     angle: 210.0,
-            //     scale: 0.9,
-            //     rotation: 0.4,
-            // },
-        ];
-
         let entity_uniform_size = mem::size_of::<EntityUniforms>() as wgpu::BufferAddress;
-        let num_entities = 1 + cube_descs.len() as wgpu::BufferAddress;
+        let num_entities = 1 + 1 as wgpu::BufferAddress;
         // Make the `uniform_alignment` >= `entity_uniform_size` and aligned to `min_uniform_buffer_offset_alignment`.
         let uniform_alignment = {
             let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
@@ -438,38 +377,16 @@ impl Example {
 
         let index_format = wgpu::IndexFormat::Uint16;
 
-        let mut entities = vec![
-            // {
-            // Entity {
-            //     mx_world: glam::Mat4::IDENTITY,
-            //     rotation_speed: 0.0,
-            //     color: wgpu::Color::WHITE,
-            //     vertex_buf: Arc::new(plane_vertex_buf),
-            //     index_buf: Arc::new(plane_index_buf),
-            //     index_format,
-            //     index_count: plane_index_data.len(),
-            //     uniform_offset: 0,
-            // }
-        // }
-        ];
-
-        for (i, cube) in cube_descs.iter().enumerate() {
-            let mx_world = glam::Mat4::from_scale_rotation_translation(
-                glam::Vec3::splat(cube.scale),
-                glam::Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), cube.angle.to_radians()),
-                cube.offset,
-            );
-            entities.push(Entity {
-                mx_world,
-                rotation_speed: cube.rotation,
-                color: wgpu::Color::GREEN,
-                vertex_buf: Arc::clone(&cube_vertex_buf),
-                index_buf: Arc::clone(&cube_index_buf),
-                index_format,
-                index_count: cube_index_data.len(),
-                uniform_offset: ((i + 1) * uniform_alignment as usize) as _,
-            });
-        }
+        let entities = vec![Entity {
+            mx_world: Mat4::IDENTITY,
+            rotation_speed: 0.2,
+            color: wgpu::Color::GREEN,
+            vertex_buf: Arc::clone(&cube_vertex_buf),
+            index_buf: Arc::clone(&cube_index_buf),
+            index_format,
+            index_count: cube_index_data.len(),
+            uniform_offset: ((0 + 1) * uniform_alignment as usize) as _,
+        }];
 
         let local_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -498,30 +415,17 @@ impl Example {
             label: None,
         });
 
-        let lights = vec![
-            Light {
-                pos: glam::Vec3::new(7.0, -5.0, 10.0),
-                color: wgpu::Color {
-                    r: 1.0,
-                    g: 1.0,
-                    b: 1.0,
-                    a: 1.0,
-                },
-                fov: 60.0,
-                depth: 1.0..20.0,
+        let lights = vec![Light {
+            pos: glam::Vec3::new(14.0, -10.0, 20.0),
+            color: wgpu::Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
             },
-            // Light {
-            //     pos: glam::Vec3::new(-5.0, 7.0, 10.0),
-            //     color: wgpu::Color {
-            //         r: 1.0,
-            //         g: 1.0,
-            //         b: 1.0,
-            //         a: 1.0,
-            //     },
-            //     fov: 45.0,
-            //     depth: 1.0..20.0,
-            // },
-        ];
+            fov: 60.0,
+            depth: 1.0..20.0,
+        }];
         let light_uniform_size =
             (Self::MAX_LIGHTS * mem::size_of::<LightRaw>()) as wgpu::BufferAddress;
         let light_storage_buf = device.create_buffer(&wgpu::BufferDescriptor {
