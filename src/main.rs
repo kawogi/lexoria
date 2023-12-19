@@ -17,18 +17,19 @@
 mod camera;
 mod framework;
 mod utils;
+mod world;
 
 use std::{borrow::Cow, f32::consts::TAU, iter, mem, ops::Range, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use camera::Camera;
 use glam::{Mat4, Vec3};
-use rand::Rng;
 use web_time::Instant;
 use wgpu::{
     util::{align_to, DeviceExt},
     Queue,
 };
+use world::create_world;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -41,176 +42,6 @@ struct Vertex {
 struct Mesh {
     vertices: Vec<Vertex>,
     indices: Vec<u16>,
-}
-
-fn vertex(pos: [i16; 3], nor: [i8; 3], color: Vec3) -> Vertex {
-    Vertex {
-        _pos: [pos[0], pos[1], pos[2], 1],
-        _normal: [nor[0], nor[1], nor[2], 0],
-        _color: [color[0], color[1], color[2], 1.0],
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-fn create_world() -> Mesh {
-    const X: usize = 32;
-    const Y: usize = 32;
-    const Z: usize = 8;
-    const HX: i16 = X as i16 / 2;
-    const HY: i16 = Y as i16 / 2;
-    const HZ: i16 = Z as i16 / 2;
-
-    let mut rng = rand::thread_rng();
-
-    let mut height_map = vec![vec![0.0; X]; Y];
-    let mut max = 0.0_f32;
-    for (y, heights) in height_map.iter_mut().enumerate() {
-        for (x, height) in heights.iter_mut().enumerate() {
-            let xx = x as f32 / X as f32;
-            let yy = y as f32 / Y as f32;
-            let h = (xx * 2.0 + 1.6).sin() * (yy * 3.0 + 0.8).sin();
-            let h = h + (xx * 7.0 + 0.7).sin() * (yy * 6.6 + 1.3).sin() * 0.5;
-            let h = h.max(0.0) + rng.gen::<f32>() * 0.1;
-            max = max.max(h);
-            *height = h;
-        }
-    }
-    for heights in &mut height_map {
-        for height in heights {
-            *height *= Z as f32 / max;
-        }
-    }
-
-    let colors = [
-        Vec3::new(0.2, 0.6, 0.8),
-        Vec3::new(1.0, 1.0, 0.5),
-        Vec3::new(0.6, 0.8, 0.0),
-        Vec3::new(0.2, 0.7, 0.1),
-        Vec3::new(0.3, 0.7, 0.1),
-        Vec3::new(0.7, 0.3, 0.2),
-        Vec3::new(0.7, 0.7, 0.7),
-        Vec3::new(1.0, 1.0, 1.0),
-    ];
-
-    let mut voxels = [[[Option::<Vec3>::None; X]; Y]; Z];
-    for (z, xy_plane) in voxels.iter_mut().enumerate() {
-        for (y, x_column) in xy_plane.iter_mut().enumerate() {
-            for (x, voxel) in x_column.iter_mut().enumerate() {
-                *voxel = ((z as f32) < height_map[y][x]).then_some(colors[z]);
-            }
-        }
-    }
-
-    let get_voxel = |x: i16, y: i16, z: i16| -> _ {
-        let Ok(x) = usize::try_from(x + HX) else {
-            return None;
-        };
-        let Ok(y) = usize::try_from(y + HY) else {
-            return None;
-        };
-        let Ok(z) = usize::try_from(z + HZ) else {
-            return None;
-        };
-        let Some(xy_plane) = voxels.get(z) else {
-            return None;
-        };
-        let Some(x_column) = xy_plane.get(y) else {
-            return None;
-        };
-        let Some(&voxel) = x_column.get(x) else {
-            return None;
-        };
-
-        voxel
-    };
-
-    let mut vertices = Vec::new();
-
-    for x in -HX..=HX {
-        for z in -HZ..HZ {
-            for y in -HY..HY {
-                let is_a = get_voxel(x - 1, y, z);
-                let is_b = get_voxel(x, y, z);
-                match (is_a, is_b) {
-                    (None, Some(color)) => {
-                        let normal = [-1, 0, 0];
-                        vertices.push(vertex([x, y, z], normal, color));
-                        vertices.push(vertex([x, y + 1, z], normal, color));
-                        vertices.push(vertex([x, y, z + 1], normal, color));
-                        vertices.push(vertex([x, y + 1, z + 1], normal, color));
-                    }
-                    (Some(color), None) => {
-                        let normal = [1, 0, 0];
-                        vertices.push(vertex([x, y, z], normal, color));
-                        vertices.push(vertex([x, y, z + 1], normal, color));
-                        vertices.push(vertex([x, y + 1, z], normal, color));
-                        vertices.push(vertex([x, y + 1, z + 1], normal, color));
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    for y in -HY..=HY {
-        for x in -HX..HX {
-            for z in -HZ..HZ {
-                let is_a = get_voxel(x, y - 1, z);
-                let is_b = get_voxel(x, y, z);
-                match (is_a, is_b) {
-                    (None, Some(color)) => {
-                        let normal = [0, -1, 0];
-                        vertices.push(vertex([x, y, z], normal, color));
-                        vertices.push(vertex([x, y, z + 1], normal, color));
-                        vertices.push(vertex([x + 1, y, z], normal, color));
-                        vertices.push(vertex([x + 1, y, z + 1], normal, color));
-                    }
-                    (Some(color), None) => {
-                        let normal = [0, 1, 0];
-                        vertices.push(vertex([x, y, z], normal, color));
-                        vertices.push(vertex([x + 1, y, z], normal, color));
-                        vertices.push(vertex([x, y, z + 1], normal, color));
-                        vertices.push(vertex([x + 1, y, z + 1], normal, color));
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    for z in -HZ..=HZ {
-        for y in -HY..HY {
-            for x in -HX..HX {
-                let is_a = get_voxel(x, y, z - 1);
-                let is_b = get_voxel(x, y, z);
-                match (is_a, is_b) {
-                    (None, Some(color)) => {
-                        let normal = [0, 0, -1];
-                        vertices.push(vertex([x, y, z], normal, color));
-                        vertices.push(vertex([x + 1, y, z], normal, color));
-                        vertices.push(vertex([x, y + 1, z], normal, color));
-                        vertices.push(vertex([x + 1, y + 1, z], normal, color));
-                    }
-                    (Some(color), None) => {
-                        let normal = [0, 0, 1];
-                        vertices.push(vertex([x, y, z], normal, color));
-                        vertices.push(vertex([x, y + 1, z], normal, color));
-                        vertices.push(vertex([x + 1, y, z], normal, color));
-                        vertices.push(vertex([x + 1, y + 1, z], normal, color));
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // let quad_count = (vertex_data.len() / 4) as u16;
-    let indices = (0..vertices.len())
-        .map(|index| index as u16 & !0b11)
-        .flat_map(|index| [index, index + 2, index + 1, index + 1, index + 2, index + 3])
-        .collect::<Vec<_>>();
-
-    Mesh { vertices, indices }
 }
 
 struct Entity {
@@ -329,25 +160,12 @@ impl Example {
         depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn init(
-        config: &wgpu::SurfaceConfiguration,
-        adapter: &wgpu::Adapter,
-        device: &wgpu::Device,
-        _queue: &wgpu::Queue,
-    ) -> Self {
-        let supports_storage_resources = adapter
-            .get_downlevel_capabilities()
-            .flags
-            .contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
-            && device.limits().max_storage_buffers_per_shader_stage > 0;
-
-        // Create the vertex and index buffers
-        let vertex_size = mem::size_of::<Vertex>();
+    fn create_world_entity(device: &wgpu::Device, uniform_alignment: u64) -> Entity {
         let Mesh {
             vertices: cube_vertex_data,
             indices: cube_index_data,
         } = create_world();
+
         let cube_vertex_buf = Arc::new(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("World Vertex Buffer"),
@@ -364,14 +182,39 @@ impl Example {
             },
         ));
 
-        let entity_uniform_size = mem::size_of::<EntityUniforms>() as wgpu::BufferAddress;
-        let num_entities = 1 + 1 as wgpu::BufferAddress;
+        Entity {
+            vertex_buf: Arc::clone(&cube_vertex_buf),
+            index_buf: Arc::clone(&cube_index_buf),
+            index_format: wgpu::IndexFormat::Uint16,
+            index_count: cube_index_data.len(),
+            uniform_offset: (0 * uniform_alignment as usize) as _,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn init(
+        config: &wgpu::SurfaceConfiguration,
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+    ) -> Self {
+        let supports_storage_resources = adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+            && device.limits().max_storage_buffers_per_shader_stage > 0;
+
+        // Create the vertex and index buffers
+        let vertex_size = mem::size_of::<Vertex>();
+
+        let entity_uniforms_size = mem::size_of::<EntityUniforms>() as wgpu::BufferAddress;
         // Make the `uniform_alignment` >= `entity_uniform_size` and aligned to `min_uniform_buffer_offset_alignment`.
         let uniform_alignment = {
             let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
-            align_to(entity_uniform_size, alignment)
+            align_to(entity_uniforms_size, alignment)
         };
         // Note: dynamic uniform offsets also have to be aligned to `Limits::min_uniform_buffer_offset_alignment`.
+        let num_entities = 1 as wgpu::BufferAddress;
         let entity_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: num_entities * uniform_alignment,
@@ -379,15 +222,7 @@ impl Example {
             mapped_at_creation: false,
         });
 
-        let index_format = wgpu::IndexFormat::Uint16;
-
-        let entities = vec![Entity {
-            vertex_buf: Arc::clone(&cube_vertex_buf),
-            index_buf: Arc::clone(&cube_index_buf),
-            index_format,
-            index_count: cube_index_data.len(),
-            uniform_offset: ((0 + 1) * uniform_alignment as usize) as _,
-        }];
+        let entities = vec![Self::create_world_entity(device, uniform_alignment)];
 
         let local_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -397,7 +232,7 @@ impl Example {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(entity_uniform_size),
+                        min_binding_size: wgpu::BufferSize::new(entity_uniforms_size),
                     },
                     count: None,
                 }],
@@ -410,7 +245,7 @@ impl Example {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &entity_uniform_buf,
                     offset: 0,
-                    size: wgpu::BufferSize::new(entity_uniform_size),
+                    size: wgpu::BufferSize::new(entity_uniforms_size),
                 }),
             }],
             label: None,
