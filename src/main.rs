@@ -291,20 +291,30 @@ struct Example {
     entity_uniform_buf: wgpu::Buffer,
     start_time: Instant,
     time: Instant,
+    phase: u32,
+    projection: Mat4,
+    view: Mat4,
 }
 
 impl Example {
     const MAX_LIGHTS: usize = 10;
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-    fn generate_matrix(aspect_ratio: f32) -> glam::Mat4 {
-        let projection = glam::Mat4::perspective_rh(consts::FRAC_PI_4, aspect_ratio, 1.0, 40.0);
-        let view = glam::Mat4::look_at_rh(
-            glam::Vec3::new(15.0, 15.0, 15.0),
+    fn generate_projection_matrix(aspect_ratio: f32) -> Mat4 {
+        glam::Mat4::perspective_rh(consts::FRAC_PI_4, aspect_ratio, 1.0, 50.0)
+    }
+
+    fn generate_view_matrix(phase: u32) -> Mat4 {
+        let angle = TAU * (f64::from(phase) / 0x1_0000_0000_u64 as f64) as f32;
+        glam::Mat4::look_at_rh(
+            glam::Vec3::new(
+                15.0 * angle.cos(),
+                15.0 * angle.sin(),
+                15.0 + 5.0 * (angle * 2.0).sin(),
+            ),
             glam::Vec3::new(0.0, 0.0, 0.0),
             glam::Vec3::Z,
-        );
-        projection * view
+        )
     }
 
     fn create_depth_texture(
@@ -453,6 +463,8 @@ impl Example {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
         });
 
+        let projection;
+        let view;
         let forward_pass = {
             // Create pipeline layout
             let bind_group_layout =
@@ -493,7 +505,10 @@ impl Example {
                 push_constant_ranges: &[],
             });
 
-            let mx_total = Self::generate_matrix(config.width as f32 / config.height as f32);
+            projection =
+                Self::generate_projection_matrix(config.width as f32 / config.height as f32);
+            view = Self::generate_view_matrix(0);
+            let mx_total = projection * view;
             let forward_uniforms = GlobalUniforms {
                 proj: mx_total.to_cols_array_2d(),
                 num_lights: [lights.len() as u32, 0, 0, 0],
@@ -574,6 +589,9 @@ impl Example {
             entity_bind_group,
             start_time: Instant::now(),
             time: Instant::now(),
+            projection,
+            view,
+            phase: 0,
         }
     }
 
@@ -584,7 +602,9 @@ impl Example {
         queue: &wgpu::Queue,
     ) {
         // update view-projection matrix
-        let mx_total = Self::generate_matrix(config.width as f32 / config.height as f32);
+        self.projection =
+            Self::generate_projection_matrix(config.width as f32 / config.height as f32);
+        let mx_total = self.projection * self.view;
         let mx_ref: &[f32; 16] = mx_total.as_ref();
         queue.write_buffer(
             &self.forward_pass.uniform_buf,
@@ -607,9 +627,21 @@ impl Example {
         let dt = now - self.time;
         self.time = now;
 
-        let angle = ((self.start_time.elapsed().as_micros() % 20_000_000) as f64 / 20_000_000.0)
-            as f32
-            * TAU;
+        let phase_delta = ((dt.as_secs_f64() / 20.0).fract() * 0x1_0000_0000_u64 as f64) as u32;
+
+        self.phase = self.phase.wrapping_add(phase_delta);
+
+        let angle = 0.0; // ((self.start_time.elapsed().as_micros() % 20_000_000) as f64 / 20_000_000.0)as f32* TAU;
+
+        // update view-projection matrix
+        self.view = Self::generate_view_matrix(self.phase);
+        let mx_total = self.projection * self.view;
+        let mx_ref: &[f32; 16] = mx_total.as_ref();
+        queue.write_buffer(
+            &self.forward_pass.uniform_buf,
+            0,
+            bytemuck::cast_slice(mx_ref),
+        );
 
         // update uniforms
         for entity in &mut self.entities {
