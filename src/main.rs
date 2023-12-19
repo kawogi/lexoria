@@ -14,22 +14,21 @@
 // cd target/generated
 // simple-http-server --nocache
 
+mod camera;
 mod framework;
 mod utils;
 
-use std::{
-    borrow::Cow,
-    f32::consts::{self, TAU},
-    iter, mem,
-    ops::Range,
-    sync::Arc,
-};
+use std::{borrow::Cow, f32::consts::TAU, iter, mem, ops::Range, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
+use camera::Camera;
 use glam::{Mat4, Vec3};
 use rand::Rng;
 use web_time::Instant;
-use wgpu::util::{align_to, DeviceExt};
+use wgpu::{
+    util::{align_to, DeviceExt},
+    Queue,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -289,31 +288,22 @@ struct Example {
     entity_bind_group: wgpu::BindGroup,
     light_storage_buf: wgpu::Buffer,
     entity_uniform_buf: wgpu::Buffer,
-    start_time: Instant,
+    _start_time: Instant,
     time: Instant,
     phase: u32,
-    projection: Mat4,
-    view: Mat4,
+    camera: Camera,
 }
 
 impl Example {
     const MAX_LIGHTS: usize = 10;
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-    fn generate_projection_matrix(aspect_ratio: f32) -> Mat4 {
-        glam::Mat4::perspective_rh(consts::FRAC_PI_4, aspect_ratio, 1.0, 50.0)
-    }
-
-    fn generate_view_matrix(phase: u32) -> Mat4 {
+    fn compute_camera_pos(phase: u32) -> Vec3 {
         let angle = TAU * (f64::from(phase) / 0x1_0000_0000_u64 as f64) as f32;
-        glam::Mat4::look_at_rh(
-            glam::Vec3::new(
-                15.0 * angle.cos(),
-                15.0 * angle.sin(),
-                15.0 + 5.0 * (angle * 2.0).sin(),
-            ),
-            glam::Vec3::new(0.0, 0.0, 0.0),
-            glam::Vec3::Z,
+        glam::Vec3::new(
+            15.0 * angle.cos(),
+            15.0 * angle.sin(),
+            15.0 + 3.0 * (angle * 2.0).sin(),
         )
     }
 
@@ -360,7 +350,7 @@ impl Example {
         } = create_world();
         let cube_vertex_buf = Arc::new(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
-                label: Some("Cubes Vertex Buffer"),
+                label: Some("World Vertex Buffer"),
                 contents: bytemuck::cast_slice(&cube_vertex_data),
                 usage: wgpu::BufferUsages::VERTEX,
             },
@@ -368,7 +358,7 @@ impl Example {
 
         let cube_index_buf = Arc::new(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
-                label: Some("Cubes Index Buffer"),
+                label: Some("World Index Buffer"),
                 contents: bytemuck::cast_slice(&cube_index_data),
                 usage: wgpu::BufferUsages::INDEX,
             },
@@ -463,8 +453,11 @@ impl Example {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
         });
 
-        let projection;
-        let view;
+        let camera = Camera::new(
+            Self::compute_camera_pos(0),
+            Vec3::new(0.0, 0.0, 0.0),
+            config.width as f32 / config.height as f32,
+        );
         let forward_pass = {
             // Create pipeline layout
             let bind_group_layout =
@@ -505,12 +498,8 @@ impl Example {
                 push_constant_ranges: &[],
             });
 
-            projection =
-                Self::generate_projection_matrix(config.width as f32 / config.height as f32);
-            view = Self::generate_view_matrix(0);
-            let mx_total = projection * view;
             let forward_uniforms = GlobalUniforms {
-                proj: mx_total.to_cols_array_2d(),
+                proj: camera.matrix().to_cols_array_2d(),
                 num_lights: [lights.len() as u32, 0, 0, 0],
             };
             let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -587,12 +576,21 @@ impl Example {
             light_storage_buf,
             entity_uniform_buf,
             entity_bind_group,
-            start_time: Instant::now(),
+            _start_time: Instant::now(),
             time: Instant::now(),
-            projection,
-            view,
             phase: 0,
+            camera,
         }
+    }
+
+    fn update_camera(&self, queue: &Queue) {
+        let camera_matrix = self.camera.matrix();
+        let mx_ref: &[f32; 16] = camera_matrix.as_ref();
+        queue.write_buffer(
+            &self.forward_pass.uniform_buf,
+            0,
+            bytemuck::cast_slice(mx_ref),
+        );
     }
 
     fn resize(
@@ -601,16 +599,8 @@ impl Example {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) {
-        // update view-projection matrix
-        self.projection =
-            Self::generate_projection_matrix(config.width as f32 / config.height as f32);
-        let mx_total = self.projection * self.view;
-        let mx_ref: &[f32; 16] = mx_total.as_ref();
-        queue.write_buffer(
-            &self.forward_pass.uniform_buf,
-            0,
-            bytemuck::cast_slice(mx_ref),
-        );
+        self.camera.aspect_ratio = config.width as f32 / config.height as f32;
+        self.update_camera(queue);
 
         self.forward_depth = Self::create_depth_texture(config, device);
     }
@@ -626,29 +616,17 @@ impl Example {
         let now = Instant::now();
         let dt = now - self.time;
         self.time = now;
-
         let phase_delta = ((dt.as_secs_f64() / 20.0).fract() * 0x1_0000_0000_u64 as f64) as u32;
-
         self.phase = self.phase.wrapping_add(phase_delta);
 
-        let angle = 0.0; // ((self.start_time.elapsed().as_micros() % 20_000_000) as f64 / 20_000_000.0)as f32* TAU;
-
-        // update view-projection matrix
-        self.view = Self::generate_view_matrix(self.phase);
-        let mx_total = self.projection * self.view;
-        let mx_ref: &[f32; 16] = mx_total.as_ref();
-        queue.write_buffer(
-            &self.forward_pass.uniform_buf,
-            0,
-            bytemuck::cast_slice(mx_ref),
-        );
+        self.camera.eye = Self::compute_camera_pos(self.phase);
+        self.update_camera(queue);
 
         // update uniforms
         for entity in &mut self.entities {
-            let rotation = glam::Mat4::from_rotation_z(angle);
             let color = wgpu::Color::GREEN;
             let data = EntityUniforms {
-                model: rotation.to_cols_array_2d(),
+                model: Mat4::IDENTITY.to_cols_array_2d(),
                 color: [
                     color.r as f32,
                     color.g as f32,
